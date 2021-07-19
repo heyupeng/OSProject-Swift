@@ -14,6 +14,7 @@
 import Foundation
 import CoreBluetooth
 
+
 class BLEManager: NSObject {
     
     let bleQueue = DispatchQueue.init(label: "com.bluetooth.queue")
@@ -23,15 +24,22 @@ class BLEManager: NSObject {
     let semaphore = DispatchSemaphore(value: 1)
     private(set) var isReadyToWork = false
     
-    var discovers: [BLEDevice] = []
+//    var discovers: [BLEDevice] = []
+    
+    var discovers: [UUID: BLEDevice] = [:]
     
     typealias BLECallback = BTH.Closure1<(BLEManager, BLEDevice)>
-    private var scanCallbacks: BTH.Callbacks<(BLEManager, BLEDevice)>?
-    private var connectCallbacks: BLECallback?
-    private var disconnectCallbacks: BLECallback?
+    typealias BLEErrorCallback = BTH.Closure1<(BLEDevice, Error?)>
+    class BLEConnectionCallbacks: NSObject {
+        var connect: BLECallback?
+        var failToConnect: BLEErrorCallback?
+        var disconnect: BLEErrorCallback?
+    }
     
-    // <UUIDString, BLE>
-    private var connectionCache: Cache<String, BLEDevice> = .init()
+    private var scanCallbacks: BTH.Callbacks<(BLEManager, BLEDevice)>?
+    
+    // <UUIDString, BLE, BLEConnection>
+    private var connectionCache: Cache<String, (BLEDevice, BLEConnectionCallbacks)> = .init()
     
     // work state
     var isScanning: Bool = false
@@ -42,8 +50,8 @@ class BLEManager: NSObject {
 extension BLEManager {
     func countInCache(_ state: CBPeripheralState) -> Int {
         var count = 0
-        connectionCache.values.forEach { d in
-            if d.state == state { count += 1 }
+        connectionCache.values.forEach { (device, callbacks) in
+            if device.state == state { count += 1 }
         }
         return count
     }
@@ -97,7 +105,7 @@ extension BLEManager {
     }
     
     func prepareForScan() {
-        self.discovers = []
+        self.discovers = [:]
         isScanning = true
     }
     
@@ -112,11 +120,13 @@ extension BLEManager {
         
         let devices = connectionCache.values
         connectionCache.removeAll()
-        for device in devices {
+        for (device, callbacks) in devices {
             if !(device.state == .connecting || device.state == .connected) {
                 continue
             }
-            device.didDisconnect(BTH.Error(.manager, code: .disconnectAsPoweredOff))
+            let err = BTH.Error(.manager, code: .disconnectAsPoweredOff)
+            callbacks.disconnect?((device, err))
+            device.didDisconnect(err)
         }
     }
 }
@@ -147,22 +157,24 @@ extension BLEManager {
         scanCallbacks = nil
     }
     
-    func connect(_ device: BLEDevice, _ connected: BLECallback? = nil) {
+    func connect(_ device: BLEDevice, _ connected: BLECallback? = nil, fail: BLEErrorCallback? = nil) {
         if device.peripheral.state == .disconnected {
             print("connect:", device.debugName)
+            var callbacks = BLEConnectionCallbacks()
+            callbacks.connect = connected
+            callbacks.failToConnect = fail
+            connectionCache.insert((device, callbacks))
             
-            self.connectCallbacks = connected
-            connectionCache.insert(device)
             device.doing(.connecting)
             manager.connect(device.peripheral, options: nil)
         }
     }
     
-    func disconnect(_ device: BLEDevice, _ disconnected: BLECallback? = nil) {
+    func disconnect(_ device: BLEDevice, _ disconnected: BLEErrorCallback? = nil) {
         if device.peripheral.state != .disconnected {
             print("disconnect:", device.debugName)
+            connectionCache[device.peripheral]?.1.disconnect = disconnected
             
-            self.disconnectCallbacks = disconnected
             device.doing(.disconnecting)
             manager.cancelPeripheralConnection(device.peripheral)
         }
@@ -179,15 +191,14 @@ extension BLEManager: CBCentralManagerDelegate {
     }
     
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-        let isContain = discovers.contains { aDevice in
-            return aDevice.peripheral.identifier.uuidString == peripheral.identifier.uuidString
-        }
-        if isContain {
+        
+        if let device = discovers[peripheral.identifier] {
+            device.addRSSI(rssi: RSSI)
             return
         }
         
         let device = BLEDevice(peripheral, advertisementData, RSSI)
-        discovers.append(device)
+        discovers[peripheral.identifier] = device
         
         print( "(\(discovers.count))", device.debugName )
         
@@ -196,44 +207,49 @@ extension BLEManager: CBCentralManagerDelegate {
     
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         print("[Callback]: Manager did connect peripheral")
-        guard let device = connectionCache[peripheral] else {
+        guard let (device, callbacks) = connectionCache[peripheral] else {
             return
         }
         device.didConnect()
-        self.connectCallbacks?((self, device))
-        self.connectCallbacks = nil
+        callbacks.connect?((self, device))
+        callbacks.connect = nil
+        callbacks.failToConnect = nil
     }
     
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         print("[Callback]: Manager did fail to connect peripheral")
-        guard let device = connectionCache.remove(peripheral) else {
+        guard let (device, callbacks) = connectionCache.remove(peripheral) else {
             return
         }
-        device.didFailToConnect(error ?? BTH.Error(.manager, code: .failToConnect))
+        let err = error ?? BTH.Error(.manager, code: .failToConnect)
+        device.didFailToConnect(err)
+        callbacks.failToConnect?((device, err))
+        callbacks.failToConnect = nil
+        callbacks.connect = nil
     }
     
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         print("[Callback]: Manager did disconnect peripheral")
         if error != nil { print("  \(error!)") }
         
-        let device = connectionCache.remove(peripheral)
-        if device != nil, device?.state != .disconnecting {
-            print("\(device?.debugName ?? "N/A") has disconnected by itself.")
+        guard let (device, callbacks) = connectionCache.remove(peripheral) else {
+            return
         }
-        if device == nil { return }
-        device?.didDisconnect(error)
-        self.disconnectCallbacks?((self, device!))
-        self.disconnectCallbacks = nil
+        if device.state != .disconnecting {
+            print("\(device.debugName) has disconnected by itself.")
+        }
+        
+        device.didDisconnect(error)
+        callbacks.disconnect?((device, error))
+        callbacks.disconnect = nil
     }
 }
 
-extension Cache where V == BLEDevice, K == String {
+extension Cache where K == String, V == (BLEDevice, BLEManager.BLEConnectionCallbacks) {
     mutating func insert(_ element: V) {
-        self[element.peripheral.identifier.uuidString] = element
+        self[element.0.peripheral.identifier.uuidString] = element
     }
-    mutating func remove(_ element: V) -> V? {
-        self.removeValue(forKey: element.peripheral.identifier.uuidString)
-    }
+    
     mutating func remove(_ peripheral: CBPeripheral) -> V? {
         self.removeValue(forKey: peripheral.identifier.uuidString)
     }

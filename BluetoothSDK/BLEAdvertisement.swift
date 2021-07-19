@@ -10,8 +10,8 @@ import Foundation
 import CoreBluetooth
 
 protocol BLEAccessibilityAdvertisement {
-    var advertisement: BLEAdvertisement { get set }
-    var RSSI: NSNumber { get set }
+    var advert: BLEAdvertisement { get set }
+    var rssiRecorder: BLERSSIRecorder { get }
 }
 
 enum BLEAdvertisementDataKey: String {
@@ -148,5 +148,77 @@ class BLEAdvertisement:NSObject, BLEAdvertisementProtocol {
     convenience init(_ advertisementData: [String: Any]) {
         self.init()
         self.advertisementData = advertisementData
+    }
+}
+
+class BLERSSIRecorder:NSObject {
+    struct Item {
+        let rssi: NSNumber;
+        let time: timeb;
+        
+        init(_ rssi: NSNumber, time: timeb) {
+            self.rssi = rssi
+            self.time = time
+        }
+        
+        var millSeconds: UInt64 {
+            return UInt64(time.time) * 1000 + UInt64(time.millitm)
+        }
+    }
+    
+    typealias BLERSSIsubscriber = (_ sender: AnyObject, _ rssi: NSNumber) -> Void
+    private var subscribers: [Int:BLERSSIsubscriber] = [:]
+    
+    var items: [Item] = []
+    
+    var rssi: NSNumber {
+        return items.last?.rssi ?? 0
+    }
+    
+    fileprivate func addRSSI(rssi: NSNumber) {
+        var t: timeb = timeb()
+        ftime(&t);
+        let item =  Item(rssi, time: t)
+        items.append(item)
+    }
+    
+    fileprivate func subscribe(_ subscriber: @escaping (_ sender: AnyObject, _ rssi: NSNumber) -> Void) -> Int {
+        let ID = self.subscribers.count + 1
+        self.subscribers[ID] = subscriber
+        return ID
+    }
+    
+    fileprivate func removeSubscribe(_ ID: Int) {
+        self.subscribers.removeValue(forKey: ID)
+    }
+    
+    fileprivate func sendMsg(_ sender: AnyObject, _ rssi: NSNumber) {
+        let subscribers = subscribers
+        subscribers.forEach { (key, subscriber) in
+            subscriber(sender, rssi)
+        }
+    }
+}
+
+extension BLEAccessibilityAdvertisement {
+    var RSSI: NSNumber {
+        self.rssiRecorder.rssi
+    }
+    
+    func addRSSI(rssi: NSNumber) {
+        self.rssiRecorder.addRSSI(rssi: rssi)
+        sendMsg(self, rssi)
+    }
+    
+    func subscribeRSSI(_ subscriber: @escaping (_ sender: AnyObject, _ rssi: NSNumber) -> Void) -> Int {
+        return self.rssiRecorder.subscribe(subscriber)
+    }
+    
+    func removeRSSISubscriber(_ ID: Int) {
+        self.rssiRecorder.removeSubscribe(ID)
+    }
+    
+    fileprivate func sendMsg(_ sender: Self, _ rssi: NSNumber) {
+        self.rssiRecorder.sendMsg(sender as AnyObject, rssi)
     }
 }

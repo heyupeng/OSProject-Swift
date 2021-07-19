@@ -106,7 +106,7 @@ extension DelegateProxyBase {
     }
 }
 
-class DelegateProxy<EO: AnyObject, D>: OCDelegateProxy, DelegateProxyBase {
+class DelegateProxy<EO: AnyObject, D>: NSObject, DelegateProxyBase {
     typealias ElementObject = EO
     typealias Delegate = D
     
@@ -124,7 +124,7 @@ class DelegateProxy<EO: AnyObject, D>: OCDelegateProxy, DelegateProxyBase {
             let count = invokeCount(forForwarding: aSelector)
             return count > 0
         }
-        let isResponds = super.responds(to: aSelector)
+        let _ = super.responds(to: aSelector)
         return true
     }
 }

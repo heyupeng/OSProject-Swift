@@ -127,8 +127,8 @@ class BLEDevice: NSObject, ConnectionHandleProtocol, BLEAccessibilityAdvertiseme
     
     var peripheral: CBPeripheral!
     
-    var advertisement: BLEAdvertisement = .init()
-    var RSSI: NSNumber = 0
+    var advert: BLEAdvertisement = .init()
+    var rssiRecorder: BLERSSIRecorder = .init()
     
     var uartService: BTHUartService?
     
@@ -138,9 +138,15 @@ class BLEDevice: NSObject, ConnectionHandleProtocol, BLEAccessibilityAdvertiseme
     convenience init(_ peripheral: CBPeripheral, _ advertisementData: [String : Any], _ RSSI: NSNumber) {
         self.init()
         self.peripheral = peripheral
-        self.advertisement = BLEAdvertisement(advertisementData)
-        self.RSSI = RSSI
+        self.advert = BLEAdvertisement(advertisementData)
+        self.addRSSI(rssi: RSSI)
         
+#if true
+        peripheral.registerProxyTarget(printer)
+        peripheral.registerProxyTarget(self)
+#else
+        peripheral.delegate = self
+#endif
     }
     
     var printer: PeripheralPrintExecutor = .init()
@@ -220,12 +226,6 @@ extension BLEDevice: CBPeripheralDelegate {
 extension BLEDevice {
     func discoverServices(_ serviceUUIDs: [CBUUID]? = nil, _ next: ((BLEDevice)->Void)? = nil, error: BTH.Callbacks.Error? = nil) {
         nextCallbacks = .init(next, error: error)
-        #if true
-        peripheral.registerProxyTarget(printer)
-        peripheral.registerProxyTarget(self)
-        #else
-        peripheral.delegate = self
-        #endif
         peripheral.discoverServices(serviceUUIDs)
     }
     
@@ -257,7 +257,7 @@ extension BLEDevice {
 
 extension BLEDevice {
     var debugName: String {
-        return "\( peripheral.identifier.uuidString) (\(peripheral.name ?? advertisement.localName ?? "N/A"))"
+        return "\( peripheral.identifier.uuidString) (\(peripheral.name ?? advert.localName ?? "N/A"))"
     }
 }
 

@@ -24,4 +24,13 @@ extension NSView {
         let appearance = NSApplication.shared.effectiveAppearance
         return appearance.isDark
     }
+    
+    public var layerBackgroundColor: CGColor? {
+        set {
+            self.layer?.backgroundColor = newValue
+        }
+        get {
+            return self.layer?.backgroundColor
+        }
+    }
 }

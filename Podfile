@@ -5,4 +5,5 @@ use_frameworks!
 
 target ‘iOSDemo’ do
   pod 'RxSwift'
+  pod 'RxCocoa'
 end

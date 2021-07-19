@@ -94,10 +94,9 @@ extension BTH {
 }
 
 extension BTH {
-    typealias Closure0 = ()-> Void
     typealias Closure1<Element> = (Element)-> Void
-    typealias Closure2<Element0, Element1> = (Element0, Element1)-> Void
-    typealias Closure3<Element0, Element1, Element2> = (Element0, Element1, Element2)-> Void
+    typealias Closure2<Element1, Element2> = (Element1, Element2)-> Void
+    typealias Closure3<Element1, Element2, Element3> = (Element1, Element2, Element3)-> Void
     
     struct Callbacks<T> {
         typealias Element = T

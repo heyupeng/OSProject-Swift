@@ -10,7 +10,7 @@ import Foundation
 import CoreBluetooth
 
 
-class DeviceVC: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource {
+class DeviceDetailController: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource {
     var bleManager: BLEManager!
     var device: BLEDevice!
     
@@ -29,10 +29,26 @@ class DeviceVC: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource
         tableView.delegate = self
         tableView.dataSource = self
         
-        if device.advertisement.isConnectable == false {
+        if device.advert.isConnectable == false {
             connectButton.isEnabled = false
         }
-        device.observeDisconnected() { [unowned self] device in
+        
+        self.device.observeConnected { [unowned self]device in
+            DispatchQueue.main.async {
+                self.setConnectButton("Disconnect")
+            }
+            device.discoverServices(nil, {[unowned self] device in
+                DispatchQueue.main.async {
+                    self.tableView.reloadData()
+                }
+            })
+        } error: {[unowned self] error in
+            DispatchQueue.main.async {
+                self.setConnectButton("Connect")
+            }
+        }
+        
+        device.observeDisconnected { [unowned self] device in
             DispatchQueue.main.async {
                 self.setConnectButton("Connect")
             }
@@ -49,43 +65,43 @@ class DeviceVC: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource
     
     func setsAdvString() {
         var advString = ""
-        if let name = device.advertisement.localName {
+        if let name = device.advert.localName {
             advString.append("LocalName: \(name)")
         }
         
         if advString.count > 0 { advString.append("\n") }
-        advString.append("Connectable: \(device.advertisement.isConnectable)")
+        advString.append("Connectable: \(device.advert.isConnectable)")
         
-        if let date = device.advertisement.date {
+        if let date = device.advert.date {
             advString.append("\n\nTime: ")
             advString.append(date.description(with: .current))
         }
         
-        if let txPower = device.advertisement.txPowerLevel {
+        if let txPower = device.advert.txPowerLevel {
             advString.append("\nTx Power Level: \(txPower) dBm")
         }
         
-        if let value = device.advertisement.rxPrimaryPHY {
+        if let value = device.advert.rxPrimaryPHY {
             advString.append("\nRx Primary PHY: \(value)")
         }
         
-        if let value = device.advertisement.rxSecondaryPHY {
+        if let value = device.advert.rxSecondaryPHY {
             advString.append("\nRx Secondary PHY: \(value)")
         }
         
-        if let value = device.advertisement.manufacturerData {
+        if let value = device.advert.manufacturerData {
             advString.append("\n\nManufacturerData: ")
             advString.append(value.hexString + "(\(value.count) bytes)")
         }
         
-        if let services = device.advertisement.ServiceUUIDs, services.count > 0 {
+        if let services = device.advert.ServiceUUIDs, services.count > 0 {
             advString.append("\n \n" + "Service UUIDs")
             services.forEach { uuid in
                 advString.append("\n" + uuid.description)
             }
         }
         
-        if let serviceData = device.advertisement.serviceData, serviceData.count > 0 {
+        if let serviceData = device.advert.serviceData, serviceData.count > 0 {
             advString.append("\n \n" + "Service Data")
             serviceData.forEach({ (key: CBUUID, value: Data) in
                 advString.append("\n" + key.description)
@@ -101,6 +117,10 @@ class DeviceVC: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource
     func setConnectButton(_ title: String, enabled: Bool = true) {
         self.connectButton.title = title
         self.connectButton.isEnabled = enabled
+        
+        let a: CGFloat = self.device.state == .connected ? 1: 0
+        let color = CGColor(red: 0x55/255.0, green: 0xbe/255.0, blue: 0xf0/255.0, alpha: a);
+        self.connectButton.superview?.layerBackgroundColor = color
     }
     
     func connect() {
@@ -110,11 +130,11 @@ class DeviceVC: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource
             DispatchQueue.main.async {
                 self.setConnectButton("Disconnect")
             }
-            device.discoverServices(nil, {[unowned self] device in
-                DispatchQueue.main.async {
-                    self.tableView.reloadData()
-                }
-            })
+//            device.discoverServices(nil, {[unowned self] device in
+//                DispatchQueue.main.async {
+//                    self.tableView.reloadData()
+//                }
+//            })
         }
     }
     
@@ -154,28 +174,13 @@ class DeviceVC: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource
     var cellItems: [CellItem] = []
 }
 
-extension DeviceVC: NSTableViewDelegate, NSTableViewDataSource {
+extension DeviceDetailController: NSTableViewDelegate, NSTableViewDataSource {
     
     func numberOfRows(in tableView: NSTableView) -> Int {
         guard let services = device.peripheral.services, services.count > 0 else {
             return 0
         }
-        var items: [CellItem] = []
-        var idx: AttIndexPath = .init(x: -1, y: -1, z: -1)
-        services.forEach { service in
-            idx.x += 1
-            items.append(CellItem(idx: idx, title: service.uuid.description))
-            service.characteristics?.forEach({ characteristic in
-                idx.y += 1
-                items.append(CellItem(idx: idx, title: characteristic.uuid.description))
-                characteristic.descriptors?.forEach({ descriptor in
-                    idx.z += 1
-                    items.append(CellItem(idx: idx, title: characteristic.uuid.description))
-                })
-                idx.z = -1
-            })
-            idx.y = -1
-        }
+        var items: [CellItem] = CellItem.items(with: services)
         cellItems = items;
         return cellItems.count
     }
@@ -187,7 +192,7 @@ extension DeviceVC: NSTableViewDelegate, NSTableViewDataSource {
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         
         let item = cellItems[row]
-        let cellIdentifier = item.attributeLevel == .service ? "Cell0" : "Cell1"
+        let cellIdentifier = item.cellIdentifier()
         let cell = tableView .makeView(withIdentifier: NSUserInterfaceItemIdentifier(cellIdentifier), owner: nil) as? NSTableCellView
         
         let title = item.indentationPrefix + item.title
@@ -201,16 +206,14 @@ extension DeviceVC: NSTableViewDelegate, NSTableViewDataSource {
                 cell.subtitleTF.stringValue = item.subtitle(for: device.peripheral)
                 cell.detailTF.stringValue = item.detailText(for: device.peripheral)
                 
-                let isCanRead = characteristic?.properties.contains(.read)
-                let isCanWrite = characteristic?.properties.contains(.write)
-                cell.accessoryButton.isEnabled = isCanRead ?? false
-                cell.accessoryButton2.isEnabled = isCanWrite ?? false
-                
-                if let isCanNotify = characteristic?.properties.contains(.notify), isCanNotify == true {
-                    cell.accessoryButton3.isEnabled = true
+                let isCanRead = item.support(.read, with: device.peripheral)
+                let isCanWrite = item.support(.write, with: device.peripheral)
+                let isCanNotify = item.support(.notify, with: device.peripheral)
+                cell.accessoryButton.isEnabled = isCanRead
+                cell.accessoryButton2.isEnabled = isCanWrite
+                cell.accessoryButton3.isEnabled = isCanNotify
+                if isCanNotify {
                     if characteristic!.isNotifying { cell.accessoryButton3.bezelColor = .cyan }
-                } else {
-                    cell.accessoryButton3.isEnabled = false
                 }
             } else {
                 cell.subtitleTF.stringValue = item.subtitle(for: device.peripheral)
@@ -238,7 +241,7 @@ extension DeviceVC: NSTableViewDelegate, NSTableViewDataSource {
     
     func accessoryButtonTapForCharacteristic(tableView: NSTableView, row: Int, event: AttributeCell.Event) {
         let item = cellItems[row]
-        guard item.level(is: .characteristic),  let characteristic = device.peripheral.characteristic(item.idx) else {
+        guard let characteristic = item.characteristic(device.peripheral) else {
             return
         }
         let err: BTH.Callbacks.Error = { [unowned self] err in
@@ -404,5 +407,44 @@ extension CellItem {
     
     func detailText(for attribute: CBDescriptor?) -> String {
         return indentationPrefix + "Value: " + "\(attribute?.value ?? "")"
+    }
+    
+    // For Characteristic Properties
+    func characteristic(_ peripheral: CBPeripheral) -> CBCharacteristic? {
+        if level(is: .characteristic),  let characteristic = peripheral.characteristic(idx) {
+            return characteristic
+        }
+        return nil
+    }
+    
+    func support(_ property: CBCharacteristicProperties, with peripheral: CBPeripheral) -> Bool{
+        let characteristic = peripheral.characteristic(idx)
+        return characteristic?.properties.contains(.read) ?? false
+    }
+}
+
+extension CellItem {
+    static func items(with services: [CBService]) -> [Self] {
+        var items: [CellItem] = []
+        var idx: AttIndexPath = .init(x: -1, y: -1, z: -1)
+        services.forEach { service in
+            idx.x += 1
+            items.append(CellItem(idx: idx, title: service.uuid.description))
+            service.characteristics?.forEach({ characteristic in
+                idx.y += 1
+                items.append(CellItem(idx: idx, title: characteristic.uuid.description))
+                characteristic.descriptors?.forEach({ descriptor in
+                    idx.z += 1
+                    items.append(CellItem(idx: idx, title: characteristic.uuid.description))
+                })
+                idx.z = -1
+            })
+            idx.y = -1
+        }
+        return items
+    }
+    
+    func cellIdentifier() -> String {
+        return attributeLevel == .service ? "Cell0" : "Cell1"
     }
 }
